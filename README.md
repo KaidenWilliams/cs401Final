@@ -10,6 +10,22 @@ Architecture Diagram:
 ![image](https://github.com/user-attachments/assets/9046be0f-b5c3-44ae-a3c8-782bcc3d6a9c)
   <br>  
 
+Pipeline Text Walkthrough: - TODO
+
+1. New Data Uploaded to raw data s3 bucket
+2. Eventbridge? sees the data upload, calls Glue Training Job
+4. Glue training job runs, completes, uploads transformed data to different s3 bucket
+5. Eventbrige? sees transformed data uploaded to s3, calls SageMaker Pipeline
+6. Sagemaker pipeline does the following steps
+7. Does additional EDA, uploads to feature store
+8. Gets data from feature store, splits into train / test, uploads that to s3
+9. Train / test used to train model
+10. Model uploaded to model registry
+11. Model deployed as endpoint, autoscaling is enabled
+12. Somehow API Gateway automatically gets made / configured
+13. Model monitor scheduled job is deployed?
+Note: we also need to configure all out code with Github, get things version controlled / integrated with Github
+
 
 TODO:
 
