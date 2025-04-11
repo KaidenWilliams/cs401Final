@@ -8,6 +8,7 @@ Architecture Diagram:
 
 ![image](https://github.com/user-attachments/assets/9046be0f-b5c3-44ae-a3c8-782bcc3d6a9c)
   <br>  
+   <br>  
 
 Pipeline Text Walkthrough (TO BE IMPROVED):
 
@@ -24,7 +25,7 @@ Pipeline Text Walkthrough (TO BE IMPROVED):
 12. Somehow API Gateway automatically gets made / configured
 13. Model monitor scheduled job is deployed?
 Note: we also need to configure all out code with Github, get things version controlled / integrated with Github
-
+  <br>  
 
 TODO:
 
