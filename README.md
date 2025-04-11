@@ -1,16 +1,17 @@
 # cs401Final
 
 
-Version control for the code part of the cs401 final project + shared document for info
+Version control for the code part of the cs401 final project + shared document for info  
+  <br>  
 
 
-Architecture Diagram:
+### Architecture Diagram:
 
 ![image](https://github.com/user-attachments/assets/9046be0f-b5c3-44ae-a3c8-782bcc3d6a9c)
   <br>  
    <br>  
 
-Pipeline Text Walkthrough (TO BE IMPROVED):
+### Pipeline Text Walkthrough (TO BE IMPROVED):
 
 1. New Data Uploaded to raw data s3 bucket
 2. Eventbridge? sees the data upload, calls Glue Training Job
@@ -27,7 +28,7 @@ Pipeline Text Walkthrough (TO BE IMPROVED):
 Note: we also need to configure all out code with Github, get things version controlled / integrated with Github
   <br>  
 
-TODO:
+### TODO:
 
 1. Data Preparation (getting it in s3) - Kaiden/Nathan
 2. EDA / Data Cleaning - Kaiden/Nathan
@@ -37,7 +38,7 @@ TODO:
 6. Making whole thing into Automatic Pipeline (EventBridge, SageMaker Pipelines / Jobs, might be kinda hard) - TBD
 <br>
 
-Helpful Links:
+### Helpful Links:
 
 - [2021 1st Place Article Explanation](https://github.com/namakemono/kaggle-birdclef-2021/tree/master)
 - [2024 1st Place Article Explanation](https://www.kaggle.com/competitions/birdclef-2024/discussion/512197)
