@@ -3,14 +3,13 @@
 
 Version control for the code part of the cs401 final project + shared document for info
 
-YOLO
 
 Architecture Diagram:
 
 ![image](https://github.com/user-attachments/assets/9046be0f-b5c3-44ae-a3c8-782bcc3d6a9c)
   <br>  
 
-Pipeline Text Walkthrough: - TODO
+Pipeline Text Walkthrough (TO BE IMPROVED):
 
 1. New Data Uploaded to raw data s3 bucket
 2. Eventbridge? sees the data upload, calls Glue Training Job
