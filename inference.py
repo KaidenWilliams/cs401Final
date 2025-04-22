@@ -59,7 +59,7 @@ def input_fn(request_body, content_type):
     if content_type == 'application/json':
         payload = json.loads(request_body)
         data_b64 = payload['array']
-        return np.load(io.BytesIO(base64.b64decode(data_b64)))
+        return np.load(io.BytesIO(base64.b64decode(data_b64)), allow_pickle=True)
     raise ValueError(f'Unsupported content type: {content_type}')
 
 def predict_fn(input_data, model):
