@@ -1,32 +1,45 @@
-# Dockerfile (for runnable Lambda Container Image - Python 3.12 / Torch 2.6)
-# Use the official AWS Lambda base image for Python 3.12
-FROM public.ecr.aws/lambda/python:3.12 as base
+# Use the official AWS Lambda base image for Python 3.9
+FROM public.ecr.aws/lambda/python:3.9 AS base
 
-# Set working directory (standard for Lambda)
+# Set working directory
 WORKDIR /var/task
 
-# Install system dependencies using dnf
-RUN dnf update -y && \
-  dnf install -y \
+# Install dependencies
+RUN yum install -y tar xz curl
+
+# Download and install static ffmpeg binary
+RUN curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+  | tar xJ && \
+  mv ffmpeg-*-static/ffmpeg /usr/local/bin/ffmpeg && \
+  chmod +x /usr/local/bin/ffmpeg
+
+# Install system dependencies
+RUN yum update -y && \
+  yum install -y \
   libsndfile \
   gcc-c++ \
   python3-devel \
-  && dnf clean all
+  && yum clean all
 
-# Install Python dependencies directly into the environment using requirements.txt
+# Copy requirements and install Python packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Optional: Clean pip cache to reduce image size
-RUN rm -rf /root/.cache/pip
+# Patch cpuinfo to avoid crashing in Lambda container
+RUN pip uninstall -y cpuinfo && pip install py-cpuinfo==9.0.0
 
-# Copy the Lambda function code into the working directory
-# Make sure 'lambda_function.py' exists in the same directory as the Dockerfile
+# Environment variables to suppress CPU topology inspection issues
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+ENV CPUINFO_NO_WARN=1
+ENV CPUINFO_LOG_LEVEL=ERROR
+
+# Optional for MKL-related issues (safe even if not using MKL)
+ENV MKL_DEBUG_CPU_TYPE=5
+
+# Copy your Lambda function code
 COPY lambda_function.py .
-# If your handler uses other local files/folders, copy them too:
-# COPY my_utils/ ./my_utils/
 
-# Set the CMD to your handler (filename.handler_function)
-# This tells Lambda what function to invoke within your code.
-# Adjust 'lambda_function.lambda_handler' if your file/handler is named differently.
+# Set the handler
 CMD [ "lambda_function.lambda_handler" ]

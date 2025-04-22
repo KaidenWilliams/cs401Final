@@ -1,6 +1,8 @@
 # lambda_function.py
 
 import librosa
+librosa.cache.enable = False
+
 import numpy as np
 import torch
 import boto3
@@ -14,24 +16,6 @@ from urllib.parse import unquote_plus  # For handling S3 keys
 print("Initializing clients and loading VAD model...")
 s3_client = boto3.client("s3")
 sagemaker_runtime = boto3.client("sagemaker-runtime")
-
-# --- Load VAD model ---
-# Ensure TORCH_HOME is set in Lambda environment variables (e.g., /tmp/torch_cache)
-# for persistent cache across warm starts within the same container instance.
-os.makedirs(os.environ.get("TORCH_HOME", "/tmp/torch_cache"), exist_ok=True)
-torch.set_num_threads(1)
-try:
-    model, utils = torch.hub.load(
-        repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False
-    )
-    (get_speech_timestamps, _, read_audio, _, _) = utils
-    print("VAD model loaded successfully.")
-except Exception as e:
-    print(f"FATAL: Error loading VAD model: {e}")
-    # If the model can't load, the function likely can't proceed.
-    # You might want to raise an exception here to cause the Lambda invocation to fail clearly.
-    raise RuntimeError(f"Failed to load Silero VAD model: {e}")
-
 
 # --- Helper Functions (compute_melspec, mono_to_color, crop_or_pad) ---
 # (These functions remain the same as in your provided script)
@@ -74,6 +58,20 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
     """
     Processes a single audio file from S3, invokes SageMaker endpoint, and deletes original file on success.
     """
+
+    try:
+        os.makedirs(os.environ.get("TORCH_HOME", "/tmp/torch_cache"), exist_ok=True)
+        torch.set_num_threads(1)
+        model, utils = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad", model="silero_vad", force_reload=False
+        )
+        (get_speech_timestamps, _, read_audio, _, _) = utils
+        print("VAD model loaded successfully.")
+    except Exception as e:
+        print(f"FATAL: Error loading VAD model: {e}")
+        # If the model can't load, the function likely can't proceed.
+        # You might want to raise an exception here to cause the Lambda invocation to fail clearly.
+        raise RuntimeError(f"Failed to load Silero VAD model: {e}")
 
     try:
         # --- Download and Initial Checks ---
@@ -228,20 +226,18 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
         }
 
 
-
 # --- Lambda Handler Entry Point ---
 def lambda_handler(event, context):
     print("Lambda handler started.")
     print("Received event:", json.dumps(event))  # Log the incoming event
 
+    audio_base64 = event.get("audio_base64")
 
-    body_str = event.get('body', '{}')
-    payload = json.loads(body_str)
-    audio_base64 = payload.get('audio_base64')
+    if not audio_base64:
+        raise ValueError("Missing 'audio_base64' in event.")
+
     audio_bytes = base64.b64decode(audio_base64)
-
     audio_buffer = io.BytesIO(audio_bytes)
-
 
     # Get SageMaker endpoint name from environment variable
     sagemaker_endpoint = os.environ.get("SAGEMAKER_ENDPOINT_NAME")
