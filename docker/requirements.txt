@@ -1,0 +1,7 @@
+# Using versions compatible with Python 3.12 from CPU index
+torch==2.6.0
+torchaudio==2.6.0
+# Other dependencies
+soundfile
+librosa
+boto3
