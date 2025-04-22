@@ -53,7 +53,9 @@ def input_fn(request_body, content_type):
     print(f"[inference.py] input_fn got content_type={content_type}, "
       f"body_len={len(request_body)}", flush=True)
     if content_type == 'application/x-npy':
-        return np.load(io.BytesIO(request_body))
+        data = np.load(io.BytesIO(request_body), allow_pickle=True)
+        print(f"[input_fn] Loaded array shape: {data.shape}, dtype: {data.dtype}")
+        return data
     if content_type == 'application/json':
         payload = json.loads(request_body)
         data_b64 = payload['array']
