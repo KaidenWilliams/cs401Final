@@ -70,39 +70,13 @@ def crop_or_pad(audio, length, sr):
 
 
 # --- Core Processing Logic for One File ---
-def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb=1.2):
+def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
     """
     Processes a single audio file from S3, invokes SageMaker endpoint, and deletes original file on success.
     """
-    print(f"Processing s3://{bucket_name}/{s3_key}")
-    audio_buffer = None
-    processed_chunks_data = (
-        []
-    )  # List to hold processed numpy arrays (as lists) for SageMaker
-    sagemaker_invoked = False
-    sagemaker_successful = False
-    file_deleted = False
 
     try:
         # --- Download and Initial Checks ---
-        base_filename = os.path.basename(s3_key)
-        print(f"Base filename: {base_filename}")
-
-        audio_buffer = BytesIO()
-        s3_client.download_fileobj(bucket_name, s3_key, audio_buffer)
-        file_size_bytes = audio_buffer.getbuffer().nbytes
-        file_size_mb = file_size_bytes / (1024 * 1024)
-        print(f"Downloaded file size: {file_size_mb:.2f} MB")
-
-        if file_size_mb > max_size_mb:
-            print(
-                f"Skipping {base_filename}: {file_size_mb:.1f}MB exceeds {max_size_mb}MB limit"
-            )
-            # Optionally delete oversized files or move them
-            # s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
-            # print(f"Deleted oversized file: {s3_key}")
-            return {"status": "skipped_oversize"}
-
         audio_buffer.seek(0)
 
         # --- VAD Processing ---
@@ -129,9 +103,6 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
                 )  # Use torchaudio utility
                 print(f"Audio loaded via read_audio for VAD. Shape: {wav_vad.shape}")
             except Exception as read_audio_err:
-                print(
-                    f"FATAL: Both librosa and read_audio failed for VAD preprocessing on {s3_key}: {read_audio_err}"
-                )
                 raise  # Fail the invocation if audio can't be read for VAD
 
         print("Getting speech timestamps...")
@@ -167,12 +138,6 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
         else:
             print("No speech detected or VAD failed, using original audio.")
 
-        if len(clean_audio) == 0:
-            print(f"Skipping {base_filename}: No audio left after VAD removal.")
-            # Decide whether to delete files with no audio left
-            # s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
-            # print(f"Deleted file with no audio after VAD: {s3_key}")
-            return {"status": "skipped_no_audio_after_vad"}
 
         # --- Spectrogram Configuration and Resampling ---
         config = {
@@ -183,6 +148,7 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
             "n_mels": 128,
             "res_type": "kaiser_fast",
         }
+
         target_sr = config["sampling_rate"]
         audio_length = config["duration"] * target_sr
         step = int(config["duration"] * 0.666 * target_sr)
@@ -199,6 +165,8 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
             print(f"Resampled audio length: {len(clean_audio)}")
         else:
             clean_audio = clean_audio.astype(np.float32)  # Ensure float32
+
+        all_sagemaker_results = []
 
         # --- Chunking, Spectrogram Generation, and Data Collection ---
         print(f"Processing {len(clean_audio)} samples in chunks...")
@@ -217,9 +185,6 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
                     continue
 
             if len(chunk) != audio_length:
-                print(
-                    f"Warning: Chunk {num_chunks_processed} has unexpected length {len(chunk)}. Skipping."
-                )
                 continue
 
             # --- Process the chunk (Spectrogram + Color) ---
@@ -228,7 +193,6 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
             )
             # Ensure image is uint8 as per your example that worked
             image = mono_to_color(melspec).astype(np.uint8)
-            num_chunks_processed += 1
 
             # --- Serialize ONE chunk using the required method ---
             payload_io = io.BytesIO()
@@ -244,91 +208,40 @@ def process_and_invoke(bucket_name, s3_key, sagemaker_endpoint_name, max_size_mb
             del payload_io, raw_bytes, b64_bytes, b64_string  # Memory cleanup
 
             # --- Invoke SageMaker Endpoint FOR THIS CHUNK ---
-            print(f"Invoking SageMaker for chunk {num_chunks_processed}...")
-            try:
-                response = sagemaker_runtime.invoke_endpoint(
-                    EndpointName=sagemaker_endpoint_name,
-                    ContentType="application/json",  # Endpoint expects JSON
-                    Body=payload_json,
-                )
-                # Process response if needed
-                result = json.loads(response["Body"].read().decode())
-                print(
-                    f"SageMaker Response (Chunk {num_chunks_processed}): {json.dumps(result)}"
-                )
-                all_sagemaker_results.append(result)  # Optionally store results
-
-                # Check if your result indicates success/failure for this chunk
-                # if not result.get("success_flag"): # Example check
-                #     sagemaker_overall_success = False
-                #     print(f"SageMaker inference failed for chunk {num_chunks_processed}")
-
-            except Exception as invoke_error:
-                print(
-                    f"ERROR invoking SageMaker for chunk {num_chunks_processed}: {invoke_error}"
-                )
-                sagemaker_overall_success = False  # Mark overall process as failed
-                # Optional: break the loop if one chunk fails? Or process all chunks?
-                # break
-
-            # Aggressive memory cleanup in loop
-            del chunk
-            del melspec
-            del image
-            del payload_json
-            if num_chunks_processed % 5 == 0:
-                gc.collect()  # Collect garbage more frequently
-
-        print(f"Finished processing {num_chunks_processed} chunks.")
-        if "clean_audio" in locals():
-            del clean_audio
-        gc.collect()
-
-        # --- Delete Original S3 File only if ALL chunks succeeded ---
-        file_deleted = False
-        if num_chunks_processed == 0:
-            print(
-                "No chunks were processed (e.g., audio too short). Treating as success for cleanup."
+            response = sagemaker_runtime.invoke_endpoint(
+                EndpointName=sagemaker_endpoint_name,
+                ContentType="application/json",  # Endpoint expects JSON
+                Body=payload_json,
             )
-            sagemaker_overall_success = True  # Or decide if empty files should be kept
-
-        if sagemaker_overall_success:
-            try:
-                print(
-                    f"All processing successful, deleting original file: s3://{bucket_name}/{s3_key}"
-                )
-                s3_client.delete_object(Bucket=bucket_name, Key=s3_key)
-                file_deleted = True
-                print("Original file deleted.")
-            except Exception as delete_error:
-                print(
-                    f"ERROR deleting original file s3://{bucket_name}/{s3_key}: {delete_error}"
-                )
-                # Log error but don't necessarily fail the function if SM was okay
-        else:
-            print(
-                "SageMaker invocation failed for one or more chunks. Original file NOT deleted."
-            )
-
+            # Process response if needed
+            result = json.loads(response["Body"].read().decode())
+            all_sagemaker_results.append(result)
+        
         return {
-            "status": "success" if sagemaker_overall_success else "processing_error",
-            "chunks_processed": num_chunks_processed,
-            "original_file_deleted": file_deleted,
-            # "sagemaker_results": all_sagemaker_results # Optionally return results
+            "sagemaker_results": all_sagemaker_results
         }
 
     except Exception as e:
-        print(f"FATAL Error processing {s3_key}: {e}")
-        import traceback
+        print(f"ERROR: {e}")
+        return {
+            "error"
+        }
 
-        traceback.print_exc()
-        return {"status": "fatal_error", "error": str(e)}
 
 
 # --- Lambda Handler Entry Point ---
 def lambda_handler(event, context):
     print("Lambda handler started.")
     print("Received event:", json.dumps(event))  # Log the incoming event
+
+
+    body_str = event.get('body', '{}')
+    payload = json.loads(body_str)
+    audio_base64 = payload.get('audio_base64')
+    audio_bytes = base64.b64decode(audio_base64)
+
+    audio_buffer = io.BytesIO(audio_bytes)
+
 
     # Get SageMaker endpoint name from environment variable
     sagemaker_endpoint = os.environ.get("SAGEMAKER_ENDPOINT_NAME")
@@ -340,40 +253,10 @@ def lambda_handler(event, context):
         }
 
     # Process all records in the event (usually only one for S3 triggers)
-    results = []
-    for record in event.get("Records", []):
-        if "s3" not in record:
-            print("WARN: Record does not contain S3 info, skipping.")
-            continue
-
-        s3_info = record["s3"]
-        bucket = s3_info["bucket"]["name"]
-        # Handle potential spaces/special characters in keys
-        key = unquote_plus(s3_info["object"]["key"])
-
-        print(f"Processing record for: Bucket={bucket}, Key={key}")
-
-        try:
-            result = process_and_invoke(bucket, key, sagemaker_endpoint)
-            results.append({"file": f"s3://{bucket}/{key}", **result})
-        except Exception as e:
-            # Catch errors raised from process_and_invoke or before it
-            print(f"FATAL exception for s3://{bucket}/{key} in handler: {e}")
-            results.append(
-                {
-                    "file": f"s3://{bucket}/{key}",
-                    "status": "handler_error",
-                    "error": str(e),
-                }
-            )
-
-    # Determine overall status code
-    # If any file failed, maybe return 500, otherwise 200
-    # Or always return 200 and let caller inspect the body for individual errors
+    result = process_and_invoke(audio_buffer, sagemaker_endpoint)
     final_status_code = 200
-    print("Lambda processing finished. Results:", json.dumps(results))
 
     return {
         "statusCode": final_status_code,
-        "body": json.dumps({"message": "Processing complete.", "results": results}),
+        "body": json.dumps({"data": result}),
     }
