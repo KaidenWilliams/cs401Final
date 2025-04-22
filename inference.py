@@ -53,13 +53,13 @@ def input_fn(request_body, content_type):
     print(f"[inference.py] input_fn got content_type={content_type}, "
       f"body_len={len(request_body)}", flush=True)
     if content_type == 'application/x-npy':
-        data = np.load(io.BytesIO(request_body), allow_pickle=True)
+        data = np.load(io.BytesIO(request_body), allow_pickle=False)
         print(f"[input_fn] Loaded array shape: {data.shape}, dtype: {data.dtype}")
         return data
     if content_type == 'application/json':
         payload = json.loads(request_body)
         data_b64 = payload['array']
-        return np.load(io.BytesIO(base64.b64decode(data_b64)), allow_pickle=True)
+        return np.load(io.BytesIO(base64.b64decode(data_b64)), allow_pickle=False)
     raise ValueError(f'Unsupported content type: {content_type}')
 
 def predict_fn(input_data, model):
