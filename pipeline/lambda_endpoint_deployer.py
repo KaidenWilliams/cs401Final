@@ -2,6 +2,7 @@
 
 
 import boto3
+import time
 
 sm_client = boto3.client("sagemaker")
 
@@ -12,7 +13,8 @@ def lambda_handler(event, context):
     
     
     # Create Endpoint Configuration
-    endpoint_config_name = f"{endpoint_name}-config"
+    timestamp = int(time.time())
+    endpoint_config_name = f"{endpoint_name}-config-{timestamp}"
     create_endpoint_config_response = sm_client.create_endpoint_config(
         EndpointConfigName=endpoint_config_name,
         ProductionVariants=[
