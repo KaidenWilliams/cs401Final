@@ -5,5 +5,7 @@ torchaudio==2.1.2
 # Other dependencies
 soundfile
 librosa
+resampy
 boto3
+flask
 py-cpuinfo==9.0.0  # explicitly pinned to avoid cpuinfo crash
