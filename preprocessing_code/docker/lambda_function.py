@@ -1,5 +1,4 @@
-# File that is deployed to FarGate for Preprocessing input and calling endpoint
-
+# lambda_function.py
 
 import librosa
 librosa.cache.enable = False
@@ -9,16 +8,17 @@ import torch
 import boto3
 import base64
 import io
-import os
-import json
-from urllib.parse import unquote_plus
+import os  # For environment variables
+import json  # For SageMaker payload/response
+from urllib.parse import unquote_plus  # For handling S3 keys
 
-
+# Global Initializations (clients, model) for potential reuse across invocations
 print("Initializing clients and loading VAD model...")
 s3_client = boto3.client("s3")
 sagemaker_runtime = boto3.client("sagemaker-runtime")
 
-
+# --- Helper Functions (compute_melspec, mono_to_color, crop_or_pad) ---
+# (These functions remain the same as in your provided script)
 def compute_melspec(audio, sr, n_mels, fmin, fmax):
     """Compute a mel-spectrogram."""
     melspec = librosa.feature.melspectrogram(
@@ -53,7 +53,7 @@ def crop_or_pad(audio, length, sr):
     return audio
 
 
-# Preprocess the data, and call endpoint
+# --- Core Processing Logic for One File ---
 def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
     """
     Processes a single audio file from S3, invokes SageMaker endpoint, and deletes original file on success.
@@ -69,6 +69,8 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
         print("VAD model loaded successfully.")
     except Exception as e:
         print(f"FATAL: Error loading VAD model: {e}")
+        # If the model can't load, the function likely can't proceed.
+        # You might want to raise an exception here to cause the Lambda invocation to fail clearly.
         raise RuntimeError(f"Failed to load Silero VAD model: {e}")
 
     try:
@@ -79,6 +81,9 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
         # Silero VAD expects 16kHz. Load/resample audio specifically for VAD.
         print("Loading audio for VAD...")
         try:
+            # Try loading directly if torchaudio's read_audio handles resampling/format well
+            # Note: read_audio might be sensitive to format; librosa is often more robust.
+            # Alternative: Load with librosa first to ensure correct format/sr.
             y_vad_loader, sr_vad_loader = librosa.load(
                 audio_buffer, sr=16000
             )  # Load directly at 16kHz
@@ -89,13 +94,14 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
                 f"Error using librosa for VAD loading: {load_err}. Trying torchaudio.read_audio..."
             )
             audio_buffer.seek(0)  # Reset buffer
+            # This might fail if the format isn't easily handled by torchaudio's backend without ffmpeg readily available
             try:
                 wav_vad = read_audio(
                     audio_buffer, sampling_rate=16000
                 )  # Use torchaudio utility
                 print(f"Audio loaded via read_audio for VAD. Shape: {wav_vad.shape}")
             except Exception as read_audio_err:
-                raise
+                raise  # Fail the invocation if audio can't be read for VAD
 
         print("Getting speech timestamps...")
         speech_timestamps = get_speech_timestamps(
@@ -106,15 +112,17 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
         # --- Load Audio for Main Processing ---
         print("Loading audio for main processing...")
         audio_buffer.seek(0)  # Reset buffer again
-        y, sr = librosa.load(audio_buffer, sr=None)
-        print(f"Audio loaded for processing. Sample Rate: {sr}, Duration: {len(y)/sr:.2f}s")
+        y, sr = librosa.load(audio_buffer, sr=None)  # Load with original sample rate
+        print(
+            f"Audio loaded for processing. Sample Rate: {sr}, Duration: {len(y)/sr:.2f}s"
+        )
 
         # --- Apply VAD Mask ---
-        clean_audio = y.copy()
+        clean_audio = y.copy()  # Start with original audio
         if speech_timestamps:
             keep_mask = np.ones(len(y), dtype=bool)
             for segment in speech_timestamps:
-                buffer = 0.25
+                buffer = 0.25  # seconds buffer around speech
                 start_sample = max(0, int((segment["start"] - buffer) * sr))
                 end_sample = min(len(y), int((segment["end"] + buffer) * sr))
                 if start_sample < end_sample:
@@ -184,27 +192,26 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
             # Ensure image is uint8 as per your example that worked
             image = mono_to_color(melspec).astype(np.uint8)
 
-            # --- Serialize chunk ---
+            # --- Serialize ONE chunk using the required method ---
             payload_io = io.BytesIO()
-            np.save(payload_io, image) 
+            np.save(payload_io, image)  # Save numpy array using np.save
             payload_io.seek(0)
             raw_bytes = payload_io.read()
-            b64_bytes = base64.b64encode(raw_bytes)
-            b64_string = b64_bytes.decode("utf-8")
+            b64_bytes = base64.b64encode(raw_bytes)  # Encode bytes to base64
+            b64_string = b64_bytes.decode("utf-8")  # Decode base64 bytes to string
 
-            # Create the JSON payload for the chunk
+            # Create the JSON payload for THIS chunk
             data_for_sagemaker = {"array": b64_string}
             payload_json = json.dumps(data_for_sagemaker)
             del payload_io, raw_bytes, b64_bytes, b64_string  # Memory cleanup
 
-            # --- Invoke SageMaker Endpoint for the chunk ---
+            # --- Invoke SageMaker Endpoint FOR THIS CHUNK ---
             response = sagemaker_runtime.invoke_endpoint(
                 EndpointName=sagemaker_endpoint_name,
-                ContentType="application/json",
+                ContentType="application/json",  # Endpoint expects JSON
                 Body=payload_json,
             )
-            # Add response to all_sagemaker_results.
-            # Each chunk might have a different result, we store the results for all chunks
+            # Process response if needed
             result = json.loads(response["Body"].read().decode())
             all_sagemaker_results.append(result)
         
@@ -219,18 +226,16 @@ def process_and_invoke(audio_buffer, sagemaker_endpoint_name):
         }
 
 
-# Entry Point for incoming data
+# --- Lambda Handler Entry Point ---
 def lambda_handler(event, context):
     print("Lambda handler started.")
-    print("Received event:", json.dumps(event))
+    print("Received event:", json.dumps(event))  # Log the incoming event
 
-    # Get the incoming data
     audio_base64 = event.get("audio_base64")
 
     if not audio_base64:
         raise ValueError("Missing 'audio_base64' in event.")
 
-    # Decode the incoming data back to .ogg, store it in memory
     audio_bytes = base64.b64decode(audio_base64)
     audio_buffer = io.BytesIO(audio_bytes)
 
@@ -243,7 +248,7 @@ def lambda_handler(event, context):
             "body": json.dumps("Configuration error: SageMaker endpoint name not set."),
         }
 
-    # Preprocess the data, and call endpoint
+    # Process all records in the event (usually only one for S3 triggers)
     result = process_and_invoke(audio_buffer, sagemaker_endpoint)
     final_status_code = 200
 
