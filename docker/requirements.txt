@@ -1,9 +1,0 @@
-# Using versions compatible with Python 3.12 from CPU index
-numpy<2.0
-torch==2.1.2
-torchaudio==2.1.2
-# Other dependencies
-soundfile
-librosa
-boto3
-py-cpuinfo==9.0.0  # explicitly pinned to avoid cpuinfo crash
