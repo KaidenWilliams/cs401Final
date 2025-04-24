@@ -23,8 +23,9 @@ import boto3
 
 
 class BirdSpeciesDataset(torch.utils.data.Dataset):
-    def __init__(self, manifest_path, transform=None):
+    def __init__(self, manifest_path, specs_dir, transform=None):
         self.df = pd.read_csv(manifest_path)
+        self.specs_dir = specs_dir
         self.transform = transform
         
         # Map species to indices
@@ -51,10 +52,10 @@ class BirdSpeciesDataset(torch.utils.data.Dataset):
         key   = row['s3_key']
     
         # Always resolve to the local path under /opt/ml/processing
-        local_path = os.path.join('/opt/ml/processing', key)
+        local_path = os.path.join(self.specs_dir, key)
     
         try:
-            spec = np.load(local_path)
+            spec = self._load_npy(local_path)
             spec = torch.from_numpy(spec).float()
             spec = spec.permute(2, 0, 1)
             if spec.max() > 1:
@@ -370,8 +371,10 @@ if __name__ == "__main__":
     ])
     
     # Create dataset
-    train_dataset = BirdSpeciesDataset(args.train_manifest, transform=train_transform)
-    val_dataset = BirdSpeciesDataset(args.val_manifest, transform=val_transform)
+
+    specs_dir = os.environ["SM_CHANNEL_SPECS"]
+    train_dataset = BirdSpeciesDataset(args.train_manifest, specs_dir, transform=train_transform)
+    val_dataset = BirdSpeciesDataset(args.val_manifest, specs_dir, transform=val_transform)
     
     # Create the custom collate function for variable-width spectrograms
     def variable_width_collate(batch):
